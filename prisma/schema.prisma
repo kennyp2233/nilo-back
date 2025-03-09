@@ -1,0 +1,376 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+
+// ==================== ENUMS ====================
+
+enum UserRole {
+  PASSENGER
+  DRIVER
+  ADMIN
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum VehicleCategory {
+  STANDARD
+  PREMIUM
+  WOMEN_ONLY
+}
+
+enum TripStatus {
+  SCHEDULED     // Para viajes interprovinciales o programados
+  SEARCHING     // Buscando conductor
+  CONFIRMED     // Conductor asignado
+  IN_PROGRESS   // Viaje en curso
+  COMPLETED     // Viaje completado
+  CANCELLED     // Viaje cancelado
+}
+
+enum TripType {
+  ON_DEMAND     // Tipo Uber
+  INTERCITY     // Tipo BlaBlaCar
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  WALLET
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum TransactionType {
+  DEPOSIT       // Recarga de saldo
+  WITHDRAWAL    // Retiro de dinero
+  PAYMENT       // Pago de viaje
+  REFUND        // Reembolso
+  TRIP_EARNING  // Ganancia por viaje
+  BONUS         // Promociones o recompensas
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ==================== MODELOS PRINCIPALES ====================
+
+model User {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  phone             String    @unique
+  passwordHash      String
+  firstName         String
+  lastName          String
+  profilePicture    String?   // URL de la imagen
+  role              UserRole
+  isActive          Boolean   @default(true)
+  lastLoginAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relaciones
+  passenger         Passenger?
+  driver            Driver?
+  tripsAsPassenger  TripPassenger[]
+  payments          Payment[]
+  wallet            Wallet?
+  paymentMethods    UserPaymentMethod[]
+  notificationTokens NotificationToken[]
+  sentRatings       Rating[]   @relation("RatingFrom")
+  receivedRatings   Rating[]   @relation("RatingTo")
+  
+  @@map("users")
+}
+
+model Passenger {
+  id                String    @id @default(uuid())
+  userId            String    @unique
+  user              User      @relation(fields: [userId], references: [id])
+  
+  // Campos específicos de pasajero
+  favoriteLocations Location[]
+  emergencyContact  String?
+  
+  @@map("passengers")
+}
+
+model Driver {
+  id                    String    @id @default(uuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id])
+  licenseNumber         String    @unique
+  licenseExpiryDate     DateTime
+  verificationStatus    VerificationStatus @default(PENDING)
+  isAvailable           Boolean   @default(false)
+  currentLocation       Json?     // { "latitude": 0.0, "longitude": 0.0 }
+  backgroundCheckStatus VerificationStatus @default(PENDING)
+  bankAccountInfo       Json?     // Información bancaria para pagos
+  
+  // Relaciones
+  vehicle               Vehicle?
+  trips                 Trip[]    // Viajes como conductor
+  documents             DriverDocument[]
+  
+  @@map("drivers")
+}
+
+model DriverDocument {
+  id              String    @id @default(uuid())
+  driverId        String
+  driver          Driver    @relation(fields: [driverId], references: [id])
+  type            String    // license, insurance, identity, etc.
+  fileUrl         String
+  status          VerificationStatus @default(PENDING)
+  uploadedAt      DateTime  @default(now())
+  verifiedAt      DateTime?
+  
+  @@map("driver_documents")
+}
+
+model Vehicle {
+  id              String    @id @default(uuid())
+  driverId        String    @unique
+  driver          Driver    @relation(fields: [driverId], references: [id])
+  plate           String    @unique
+  make            String
+  model           String
+  year            Int
+  color           String
+  capacity        Int       @default(4)
+  category        VehicleCategory @default(STANDARD)
+  photoUrl        String?
+  insuranceStatus VerificationStatus @default(PENDING)
+  active          Boolean   @default(true)
+  
+  @@map("vehicles")
+}
+
+model Trip {
+  id              String    @id @default(uuid())
+  type            TripType
+  driverId        String?
+  driver          Driver?   @relation(fields: [driverId], references: [id])
+  status          TripStatus
+  startLocation   Json      // { "latitude": 0.0, "longitude": 0.0, "address": "" }
+  endLocation     Json      // { "latitude": 0.0, "longitude": 0.0, "address": "" }
+  distance        Float     // en kilómetros
+  duration        Int       // en minutos
+  fare            Decimal   @db.Decimal(10, 2)
+  estimatedFare   Decimal   @db.Decimal(10, 2)
+  scheduledAt     DateTime? // Para viajes programados
+  startedAt       DateTime?
+  endedAt         DateTime?
+  cancellationReason String?
+  routePolyline   String?   // Ruta codificada de Google Maps o similar
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  // Campos adicionales para viajes interprovinciales
+  origin          String?   // Ciudad/Provincia de origen
+  destination     String?   // Ciudad/Provincia de destino
+  availableSeats  Int?
+  pricePerSeat    Decimal?  @db.Decimal(10, 2)
+  
+  // Relaciones
+  passengers      TripPassenger[]
+  payment         Payment?
+  ratings         Rating[]
+  
+  @@map("trips")
+}
+
+model TripPassenger {
+  id              String    @id @default(uuid())
+  tripId          String
+  trip            Trip      @relation(fields: [tripId], references: [id])
+  passengerId     String
+  passenger       User      @relation(fields: [passengerId], references: [id])
+  pickupLocation  Json?     // Puede ser diferente a la ubicación de inicio del viaje
+  dropoffLocation Json?     // Puede ser diferente a la ubicación final del viaje
+  fare            Decimal   @db.Decimal(10, 2)
+  status          TripStatus
+  bookedSeats     Int       @default(1)
+  
+  @@map("trip_passengers")
+}
+
+model Location {
+  id              String    @id @default(uuid())
+  passengerId     String
+  passenger       Passenger @relation(fields: [passengerId], references: [id])
+  name            String
+  address         String
+  latitude        Float
+  longitude       Float
+  isHome          Boolean   @default(false)
+  isWork          Boolean   @default(false)
+  
+  @@map("locations")
+}
+
+model Payment {
+  id              String    @id @default(uuid())
+  tripId          String    @unique
+  trip            Trip      @relation(fields: [tripId], references: [id])
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  amount          Decimal   @db.Decimal(10, 2)
+  method          PaymentMethod
+  status          PaymentStatus
+  transactionId   String?
+  receiptUrl      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  // Campos para análisis financiero
+  platformFee     Decimal   @db.Decimal(10, 2)
+  driverAmount    Decimal   @db.Decimal(10, 2)
+  taxAmount       Decimal   @db.Decimal(10, 2)
+  
+  @@map("payments")
+}
+
+model Rating {
+  id              String    @id @default(uuid())
+  tripId          String
+  trip            Trip      @relation(fields: [tripId], references: [id])
+  fromUserId      String
+  fromUser        User      @relation("RatingFrom", fields: [fromUserId], references: [id])
+  toUserId        String
+  toUser          User      @relation("RatingTo", fields: [toUserId], references: [id])
+  score           Int       // 1-5
+  comment         String?
+  createdAt       DateTime  @default(now())
+  
+  @@map("ratings")
+}
+
+model TariffConfig {
+  id                 String    @id @default(uuid())
+  name               String    @unique
+  basePrice          Decimal   @db.Decimal(10, 2)
+  pricePerKm         Decimal   @db.Decimal(10, 2)
+  pricePerMinute     Decimal   @db.Decimal(10, 2)
+  minimumPrice       Decimal   @db.Decimal(10, 2)
+  cancelFee          Decimal   @db.Decimal(10, 2)
+  vehicleCategory    VehicleCategory
+  isActive           Boolean   @default(true)
+  applyTripType      TripType
+  regionCode         String?   // Código para aplicar tarifas específicas por región
+  
+  // Campos adicionales para tarifas dinámicas
+  surgeMultiplier    Decimal?  @db.Decimal(5, 2)
+  nightSurcharge     Decimal?  @db.Decimal(10, 2)
+  peakHourSurcharge  Decimal?  @db.Decimal(10, 2)
+  
+  // Comisiones
+  platformFeePercentage Decimal @default(20.00) @db.Decimal(5, 2) // 20% por defecto
+  
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  
+  @@map("tariff_configs")
+}
+
+model UserPaymentMethod {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  type            PaymentMethod
+  isDefault       Boolean   @default(false)
+  
+  // Para tarjetas
+  cardLast4       String?
+  cardBrand       String?
+  expiryMonth     Int?
+  expiryYear      Int?
+  cardholderName  String?
+  
+  // Para métodos de pago externos
+  externalId      String?
+  
+  @@map("payment_methods")
+}
+
+model Wallet {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id])
+  balance         Decimal   @default(0) @db.Decimal(10, 2)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  // Relaciones
+  transactions    WalletTransaction[]
+  
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id              String    @id @default(uuid())
+  walletId        String
+  wallet          Wallet    @relation(fields: [walletId], references: [id])
+  amount          Decimal   @db.Decimal(10, 2)
+  balanceAfter    Decimal   @db.Decimal(10, 2)
+  type            TransactionType
+  description     String
+  referenceId     String?   // ID del viaje o pago asociado
+  status          TransactionStatus @default(COMPLETED)
+  createdAt       DateTime  @default(now())
+  
+  @@map("wallet_transactions")
+}
+
+model NotificationToken {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  token       String    @unique
+  deviceInfo  String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  @@map("notification_tokens")
+}
+
+model PromoCode {
+  id              String    @id @default(uuid())
+  code            String    @unique
+  description     String
+  discountAmount  Decimal?  @db.Decimal(10, 2)  // Monto fijo
+  discountPercent Decimal?  @db.Decimal(5, 2)   // Porcentaje
+  maxDiscount     Decimal?  @db.Decimal(10, 2)  // Límite máximo del descuento
+  startDate       DateTime
+  endDate         DateTime
+  isActive        Boolean   @default(true)
+  usageLimit      Int?      // Número máximo de usos
+  currentUses     Int       @default(0)
+  minTripAmount   Decimal?  @db.Decimal(10, 2)  // Monto mínimo de viaje
+  applicableTripTypes TripType[] // Tipo de viajes donde aplica
+  
+  @@map("promo_codes")
+}

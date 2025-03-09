@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15.3
+    container_name: nilo-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: nilo_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - nilo_network
+
+volumes:
+  postgres_data:
+
+networks:
+  nilo_network:
+    driver: bridge

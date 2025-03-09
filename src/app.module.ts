@@ -2,12 +2,14 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { GeocodingModule } from './geocoding/geocoding.module';
 import { OrsModule } from './ors/ors.module';
+import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot(), // Carga las variables de entorno
+    ConfigModule.forRoot(),
     GeocodingModule,
-    OrsModule, // Solo importa el módulo, no repitas providers ni controllers
+    OrsModule,
+    PrismaModule,
   ],
 })
-export class AppModule { }
+export class AppModule {}
