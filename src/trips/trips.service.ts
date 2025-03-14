@@ -1,5 +1,5 @@
 // src/trips/trips.service.ts
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GeocodingService } from '../geocoding/geocoding.service';
 import { OrsService } from '../ors/ors.service';
@@ -39,9 +39,20 @@ export class TripsService {
         const startCoords: [number, number] = [startLocation.latitude, startLocation.longitude];
         const endCoords: [number, number] = [endLocation.latitude, endLocation.longitude];
 
-        const routeData = await this.orsService.getRoute(startCoords, endCoords);
+        let routeData;
+        try {
+            routeData = await this.orsService.getRoute(startCoords, endCoords);
 
-        // Extract route details
+            // Validar que routeData y routeData.routes existan y no sean undefined
+            if (!routeData || !routeData.routes || routeData.routes.length === 0) {
+                console.log(JSON.stringify(routeData));
+                throw new Error('No se pudo generar una ruta entre esas ubicaciones');
+            }
+        } catch (error) {
+            throw new BadRequestException(`Error al calcular la ruta: ${error.message}`);
+        }
+
+        // Extract route details (ahora es seguro acceder a routeData.routes[0])
         const distance = routeData.routes[0].summary.distance / 1000; // Convert to km
         const duration = Math.round(routeData.routes[0].summary.duration / 60); // Convert to minutes
         const routePolyline = routeData.routes[0].geometry;
@@ -76,53 +87,57 @@ export class TripsService {
         }
 
         // Create the trip
-        const trip = await this.prisma.$transaction(async (prisma) => {
-            // Create the trip
-            const newTrip = await prisma.trip.create({
-                data: {
-                    type,
-                    status: type === TripType.ON_DEMAND ? TripStatus.SEARCHING : TripStatus.SCHEDULED,
-                    startLocation: startLocation ? {
-                        latitude: startLocation.latitude,
-                        longitude: startLocation.longitude,
-                        address: startLocation.address,
-                        // Include all other properties from LocationDto
-                    } : null,
-                    endLocation: endLocation ? {
-                        latitude: startLocation.latitude,
-                        longitude: startLocation.longitude,
-                        address: startLocation.address,
-                        // Include all other properties from LocationDto
-                    } : null,
-                    distance,
-                    duration,
-                    estimatedFare,
-                    fare,
-                    routePolyline,
-                    scheduledAt,
-                    // Fields for intercity trips
-                    origin: startLocation.address?.city || '',
-                    destination: endLocation.address?.city || '',
-                    availableSeats,
-                    pricePerSeat,
-                },
+        try {
+            const trip = await this.prisma.$transaction(async (prisma) => {
+                // Create the trip
+                const newTrip = await prisma.trip.create({
+                    data: {
+                        type,
+                        status: type === TripType.ON_DEMAND ? TripStatus.SEARCHING : TripStatus.SCHEDULED,
+                        startLocation: startLocation ? {
+                            latitude: startLocation.latitude,
+                            longitude: startLocation.longitude,
+                            address: startLocation.address,
+                            // Include all other properties from LocationDto
+                        } : null,
+                        endLocation: endLocation ? {
+                            latitude: endLocation.latitude,
+                            longitude: endLocation.longitude,
+                            address: endLocation.address,
+                            // Include all other properties from LocationDto
+                        } : null,
+                        distance,
+                        duration,
+                        estimatedFare,
+                        fare,
+                        routePolyline,
+                        scheduledAt,
+                        // Fields for intercity trips
+                        origin: startLocation.address?.city || '',
+                        destination: endLocation.address?.city || '',
+                        availableSeats,
+                        pricePerSeat,
+                    },
+                });
+
+                // Add the passenger to the trip
+                await prisma.tripPassenger.create({
+                    data: {
+                        tripId: newTrip.id,
+                        passengerId: userId,
+                        fare: type === TripType.ON_DEMAND ? estimatedFare : pricePerSeat,
+                        status: newTrip.status,
+                        bookedSeats: type === TripType.INTERCITY ? 1 : undefined,
+                    },
+                });
+
+                return newTrip;
             });
 
-            // Add the passenger to the trip
-            await prisma.tripPassenger.create({
-                data: {
-                    tripId: newTrip.id,
-                    passengerId: userId,
-                    fare: type === TripType.ON_DEMAND ? estimatedFare : pricePerSeat,
-                    status: newTrip.status,
-                    bookedSeats: type === TripType.INTERCITY ? 1 : undefined,
-                },
-            });
-
-            return newTrip;
-        });
-
-        return trip;
+            return trip;
+        } catch (error) {
+            throw new InternalServerErrorException(`Error al crear el viaje: ${error.message}`);
+        }
     }
 
     private calculateFare(distance: number, duration: number, tariff: any): number {
