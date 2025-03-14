@@ -15,7 +15,9 @@ import { WalletsModule } from './wallet/wallets.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { validate } from './config/env.validation';
+import { Public } from './auth/decorators/public.decorator';
 
+@Public()
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -34,11 +36,13 @@ import { validate } from './config/env.validation';
     NotificationsModule,
     PromotionsModule,
   ],
+  /*
   providers: [
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
     },
   ],
+  */
 })
 export class AppModule { }

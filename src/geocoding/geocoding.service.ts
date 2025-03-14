@@ -87,7 +87,7 @@ export class GeocodingService {
             );
 
             const result = this.mapNominatimResponse(response.data);
-
+            this.logger.debug(`Reverse geocoding result: ${JSON.stringify(result)}`);
             // Cache result
             await this.cacheManager.set(cacheKey, result, 86400);
 
