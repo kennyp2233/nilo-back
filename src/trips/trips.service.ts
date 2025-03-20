@@ -43,8 +43,9 @@ export class TripsService {
         try {
             routeData = await this.orsService.getRoute(startCoords, endCoords);
 
-            // Validar que routeData y routeData.routes existan y no sean undefined
-            if (!routeData || !routeData.routes || routeData.routes.length === 0) {
+            // Validar que la estructura de datos sea correcta
+            if (!routeData || !routeData.features || routeData.features.length === 0 ||
+                !routeData.features[0].properties || !routeData.features[0].properties.summary) {
                 console.log(JSON.stringify(routeData));
                 throw new Error('No se pudo generar una ruta entre esas ubicaciones');
             }
@@ -52,10 +53,11 @@ export class TripsService {
             throw new BadRequestException(`Error al calcular la ruta: ${error.message}`);
         }
 
-        // Extract route details (ahora es seguro acceder a routeData.routes[0])
-        const distance = routeData.routes[0].summary.distance / 1000; // Convert to km
-        const duration = Math.round(routeData.routes[0].summary.duration / 60); // Convert to minutes
-        const routePolyline = routeData.routes[0].geometry;
+        // Extract route details utilizando la estructura correcta
+        const feature = routeData.features[0];
+        const distance = feature.properties.summary.distance / 1000; // Convert to km
+        const duration = Math.round(feature.properties.summary.duration / 60); // Convert to minutes
+        const routePolyline = JSON.stringify(feature.geometry); // Guardar la geometría como JSON string
 
         // Get applicable tariff
         const tariff = await this.prisma.tariffConfig.findFirst({
@@ -98,13 +100,11 @@ export class TripsService {
                             latitude: startLocation.latitude,
                             longitude: startLocation.longitude,
                             address: startLocation.address,
-                            // Include all other properties from LocationDto
                         } : null,
                         endLocation: endLocation ? {
                             latitude: endLocation.latitude,
                             longitude: endLocation.longitude,
                             address: endLocation.address,
-                            // Include all other properties from LocationDto
                         } : null,
                         distance,
                         duration,
