@@ -90,6 +90,8 @@ export class TripsService {
 
         // Create the trip
         try {
+            console.log('Start', startLocation);
+            console.log('End', endLocation);
             const trip = await this.prisma.$transaction(async (prisma) => {
                 // Create the trip
                 const newTrip = await prisma.trip.create({
@@ -113,8 +115,8 @@ export class TripsService {
                         routePolyline,
                         scheduledAt,
                         // Fields for intercity trips
-                        origin: startLocation.address?.city || '',
-                        destination: endLocation.address?.city || '',
+                        origin: startLocation.displayName || '',
+                        destination: endLocation.displayName || '',
                         availableSeats,
                         pricePerSeat,
                     },
@@ -193,6 +195,7 @@ export class TripsService {
                     },
                 },
             });
+            console.log(trips);
 
             return trips;
         } else if (role === UserRole.DRIVER) {

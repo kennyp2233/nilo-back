@@ -26,6 +26,10 @@ export class LocationDto {
     @IsOptional()
     @IsObject()
     address?: any;
+
+    @IsOptional()
+    displayName?: string;
+
 }
 
 export class CreateTripDto {
