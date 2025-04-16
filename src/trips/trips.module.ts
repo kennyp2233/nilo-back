@@ -1,5 +1,5 @@
 // src/trips/trips.module.ts
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TripsService } from './trips.service';
 import { TripCreatorService } from './services/trip-creator.service';
 import { TripFinderService } from './services/trip-finder.service';
@@ -18,7 +18,7 @@ import { WebsocketsModule } from '../websockets/websockets.module';
     PrismaModule,
     GeocodingModule,
     OrsModule,
-    WebsocketsModule,
+    forwardRef(() => WebsocketsModule), // Usar forwardRef para romper la dependencia circular
   ],
   controllers: [TripsController],
   providers: [

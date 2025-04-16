@@ -308,6 +308,13 @@ export class TripUpdaterService {
             });
         }
 
+        if (status === TripStatus.COMPLETED || status === TripStatus.CANCELLED) {
+            // Programar la desuscripción para dar tiempo a que los clientes reciban el último evento
+            setTimeout(() => {
+                this.tripsGateway.unsubscribeFromCompletedTrip(tripId);
+            }, 10000); // 10 segundos después
+        }
+
         return updatedTrip;
     }
 
@@ -347,4 +354,6 @@ export class TripUpdaterService {
         const total = ratings.reduce((sum, rating) => sum + rating.score, 0);
         return parseFloat((total / ratings.length).toFixed(1));
     }
+
+
 }

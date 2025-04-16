@@ -11,7 +11,7 @@ import {
     MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger, UseGuards } from '@nestjs/common';
+import { forwardRef, Inject, Logger, UseGuards } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { TripsService } from '../trips/trips.service';
 import { WsJwtGuard } from './guards/ws-jwt.guard';
@@ -30,6 +30,7 @@ export class TripsGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
 
     constructor(
         private readonly jwtService: JwtService,
+        @Inject(forwardRef(() => TripsService))
         private readonly tripsService: TripsService,
     ) { }
 
@@ -158,5 +159,21 @@ export class TripsGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
     sendToUser(userId: string, event: string, data: any) {
         this.server.to(`user_${userId}`).emit(event, data);
         this.logger.log(`Sent ${event} to user ${userId}`);
+    }
+
+    async unsubscribeFromCompletedTrip(tripId: string) {
+        try {
+            // Encontrar todos los sockets en la sala del viaje
+            const sockets = await this.server.in(`trip_${tripId}`).fetchSockets();
+
+            // Desuscribir cada socket de la sala
+            for (const socket of sockets) {
+                socket.leave(`trip_${tripId}`);
+            }
+
+            this.logger.log(`All clients unsubscribed from completed trip ${tripId}`);
+        } catch (error) {
+            this.logger.error(`Error unsubscribing from trip ${tripId}: ${error.message}`);
+        }
     }
 }

@@ -30,6 +30,7 @@
     "@nestjs/mapped-types": "^2.1.0",
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^10.0.0",
+    "@nestjs/platform-socket.io": "^10.4.17",
     "@nestjs/throttler": "^6.4.0",
     "@nestjs/websockets": "^10.4.17",
     "@prisma/client": "^6.4.1",

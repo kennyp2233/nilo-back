@@ -1,5 +1,5 @@
 // src/websockets/websockets.module.ts
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TripsGateway } from './trips.gateway';
@@ -8,7 +8,7 @@ import { WsJwtGuard } from './guards/ws-jwt.guard';
 
 @Module({
     imports: [
-        TripsModule,
+        forwardRef(() => TripsModule), // Usar forwardRef para romper la dependencia circular
         JwtModule.registerAsync({
             imports: [ConfigModule],
             inject: [ConfigService],

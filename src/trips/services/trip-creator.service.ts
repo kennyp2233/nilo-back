@@ -1,5 +1,5 @@
 // src/trips/services/trip-creator.service.ts
-import { Injectable, NotFoundException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, InternalServerErrorException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { GeocodingService } from 'src/geocoding/geocoding.service';
 import { OrsService } from 'src/ors/ors.service';
@@ -14,6 +14,7 @@ export class TripCreatorService {
         private readonly prisma: PrismaService,
         private readonly geocodingService: GeocodingService,
         private readonly orsService: OrsService,
+        @Inject(forwardRef(() => TripsGateway))
         private readonly tripsGateway: TripsGateway,
         private readonly tripUpdaterService: TripUpdaterService,
     ) { }
@@ -91,6 +92,14 @@ export class TripCreatorService {
 
             // Set timer for automatic cancellation if no driver accepts
             this.setDriverAssignmentTimeout(trip, userId);
+
+            // Al final del método, antes del return:
+            if (trip.type === TripType.ON_DEMAND) {
+                return {
+                    ...trip,
+                    estimatedAssignmentTime: 2, // 2 minutos de tiempo estimado para asignación
+                };
+            }
 
             return trip;
         } catch (error) {
