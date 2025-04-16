@@ -1,11 +1,12 @@
 // src/trips/trips.service.ts
-import { Injectable, NotFoundException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, InternalServerErrorException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GeocodingService } from '../geocoding/geocoding.service';
 import { OrsService } from '../ors/ors.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UpdateTripDto } from './dto/update-trip.dto';
 import { Prisma, TripStatus, TripType, UserRole } from '@prisma/client';
+import { TripsGateway } from '../websockets/trips.gateway';
 
 @Injectable()
 export class TripsService {
@@ -13,6 +14,8 @@ export class TripsService {
         private readonly prisma: PrismaService,
         private readonly geocodingService: GeocodingService,
         private readonly orsService: OrsService,
+        @Inject(forwardRef(() => TripsGateway))
+        private readonly tripsGateway: TripsGateway,
     ) { }
 
     async createTrip(userId: string, createTripDto: CreateTripDto) {
@@ -90,8 +93,6 @@ export class TripsService {
 
         // Create the trip
         try {
-            console.log('Start', startLocation);
-            console.log('End', endLocation);
             const trip = await this.prisma.$transaction(async (prisma) => {
                 // Create the trip
                 const newTrip = await prisma.trip.create({
@@ -136,10 +137,63 @@ export class TripsService {
                 return newTrip;
             });
 
+            // Emit trip created event via WebSocket
+            this.tripsGateway.emitTripUpdate(trip.id, trip.status, {
+                trip: {
+                    id: trip.id,
+                    type: trip.type,
+                    status: trip.status,
+                    distance: trip.distance,
+                    duration: trip.duration,
+                    estimatedFare: trip.estimatedFare,
+                    startLocation: trip.startLocation,
+                    endLocation: trip.endLocation,
+                    createdAt: trip.createdAt,
+                }
+            });
+
+            // Set timer for 2 minutes to check if trip is still in SEARCHING state
+            if (trip.type === TripType.ON_DEMAND) {
+                setTimeout(async () => {
+                    const currentTrip = await this.prisma.trip.findUnique({
+                        where: { id: trip.id },
+                    });
+
+                    if (currentTrip && currentTrip.status === TripStatus.SEARCHING) {
+                        // No driver accepted the trip within 2 minutes
+                        await this.updateTripStatusWithNotification(
+                            trip.id,
+                            TripStatus.CANCELLED,
+                            "No se encontró un conductor disponible",
+                            userId
+                        );
+                    }
+                }, 120000); // 2 minutes
+            }
+
             return trip;
         } catch (error) {
             throw new InternalServerErrorException(`Error al crear el viaje: ${error.message}`);
         }
+    }
+
+    // New method for checking if user has access to trip
+    async userHasAccessToTrip(tripId: string, userId: string): Promise<boolean> {
+        const trip = await this.prisma.trip.findUnique({
+            where: { id: tripId },
+            include: {
+                driver: true,
+                passengers: true,
+            },
+        });
+
+        if (!trip) return false;
+
+        // Check if user is driver or passenger
+        const isDriver = trip.driver?.userId === userId;
+        const isPassenger = trip.passengers.some(p => p.passengerId === userId);
+
+        return isDriver || isPassenger;
     }
 
     private calculateFare(distance: number, duration: number, tariff: any): number {
@@ -161,6 +215,109 @@ export class TripsService {
         // For simplicity, not implementing time-based checks here
 
         return parseFloat(fare.toFixed(2));
+    }
+
+    // New method for updating trip status and sending notifications
+    async updateTripStatusWithNotification(
+        tripId: string,
+        status: TripStatus,
+        reason?: string,
+        userId?: string
+    ) {
+        const trip = await this.prisma.trip.findUnique({
+            where: { id: tripId },
+            include: {
+                passengers: true,
+                driver: { include: { user: true } },
+            },
+        });
+
+        if (!trip) {
+            throw new NotFoundException('Viaje no encontrado');
+        }
+
+        // Update trip and passenger statuses
+        const updatedTrip = await this.prisma.$transaction(async (prisma) => {
+            // Update trip status
+            const updated = await prisma.trip.update({
+                where: { id: tripId },
+                data: {
+                    status,
+                    cancellationReason: reason,
+                    ...(status === TripStatus.IN_PROGRESS && { startedAt: new Date() }),
+                    ...(status === TripStatus.COMPLETED && { endedAt: new Date() }),
+                },
+            });
+
+            // Update all passengers' status
+            await prisma.tripPassenger.updateMany({
+                where: { tripId },
+                data: { status },
+            });
+
+            return updated;
+        });
+
+        // Emit update via WebSocket
+        const statusData: any = {
+            trip: {
+                id: updatedTrip.id,
+                status: updatedTrip.status,
+            }
+        };
+
+        // Add relevant data based on status
+        if (status === TripStatus.CANCELLED) {
+            statusData.reason = reason;
+        } else if (status === TripStatus.CONFIRMED && trip.driver) {
+            statusData.driver = {
+                name: `${trip.driver.user.firstName} ${trip.driver.user.lastName}`,
+                profilePicture: trip.driver.user.profilePicture,
+            };
+        }
+
+        this.tripsGateway.emitTripUpdate(tripId, status, statusData);
+
+        // Send personalized notifications to each user
+        // Passengers
+        for (const passenger of trip.passengers) {
+            this.tripsGateway.sendToUser(passenger.passengerId, 'trip_notification', {
+                tripId,
+                status,
+                message: this.getTripStatusMessage(status, reason),
+            });
+        }
+
+        // Driver
+        if (trip.driver) {
+            this.tripsGateway.sendToUser(trip.driver.userId, 'trip_notification', {
+                tripId,
+                status,
+                message: this.getTripStatusMessage(status, reason),
+            });
+        }
+
+        return updatedTrip;
+    }
+
+    // Helper method to get status message
+    private getTripStatusMessage(status: TripStatus, reason?: string): string {
+        switch (status) {
+            case TripStatus.SEARCHING:
+                return 'Buscando conductor para tu viaje...';
+            case TripStatus.CONFIRMED:
+                return 'Un conductor ha aceptado tu viaje';
+            case TripStatus.IN_PROGRESS:
+                return 'Tu viaje ha comenzado';
+            case TripStatus.COMPLETED:
+                return 'Tu viaje ha finalizado';
+            case TripStatus.CANCELLED:
+                return reason ? `Viaje cancelado: ${reason}` : 'Viaje cancelado';
+            case TripStatus.SCHEDULED:
+                return 'Tu viaje ha sido programado';
+            default:
+                return 'Estado del viaje actualizado';
+        }
     }
 
     async findAll(userId: string, status?: TripStatus, role?: UserRole) {
@@ -195,7 +352,6 @@ export class TripsService {
                     },
                 },
             });
-            console.log(trips);
 
             return trips;
         } else if (role === UserRole.DRIVER) {
@@ -329,31 +485,18 @@ export class TripsService {
     }
 
     private async handleDriverUpdate(trip: any, updateTripDto: UpdateTripDto) {
-        const { status } = updateTripDto;
+        const { status, cancellationReason } = updateTripDto;
 
         // Validate status transition
         this.validateStatusTransition(trip.status, status, 'driver');
 
-        // Update trip status
-        return this.prisma.$transaction(async (prisma) => {
-            // Update trip status
-            const updatedTrip = await prisma.trip.update({
-                where: { id: trip.id },
-                data: {
-                    status,
-                    ...(status === TripStatus.IN_PROGRESS && { startedAt: new Date() }),
-                    ...(status === TripStatus.COMPLETED && { endedAt: new Date() }),
-                },
-            });
-
-            // Update all passengers' status
-            await prisma.tripPassenger.updateMany({
-                where: { tripId: trip.id },
-                data: { status },
-            });
-
-            return updatedTrip;
-        });
+        // Update trip status with notification
+        return this.updateTripStatusWithNotification(
+            trip.id,
+            status,
+            cancellationReason || null,
+            trip.driver.userId
+        );
     }
 
     private async handlePassengerUpdate(trip: any, userId: string, updateTripDto: UpdateTripDto) {
@@ -388,18 +531,35 @@ export class TripsService {
             });
 
             if (activePassengers === 0) {
-                return prisma.trip.update({
+                const updatedTrip = await prisma.trip.update({
                     where: { id: trip.id },
                     data: {
                         status: TripStatus.CANCELLED,
                         cancellationReason: cancellationReason || 'Todos los pasajeros cancelaron',
                     },
                 });
+
+                // Emit trip update via WebSocket
+                this.tripsGateway.emitTripUpdate(trip.id, TripStatus.CANCELLED, {
+                    reason: cancellationReason || 'Todos los pasajeros cancelaron'
+                });
+
+                return updatedTrip;
             }
 
-            return prisma.trip.findUnique({
+            const updatedTrip = await prisma.trip.findUnique({
                 where: { id: trip.id },
             });
+
+            // Emit individual passenger cancellation
+            if (status === TripStatus.CANCELLED) {
+                this.tripsGateway.emitTripUpdate(trip.id, trip.status, {
+                    passengerCancelled: userId,
+                    reason: cancellationReason
+                });
+            }
+
+            return updatedTrip;
         });
     }
 
@@ -454,6 +614,9 @@ export class TripsService {
                 id: tripId,
                 status: TripStatus.SEARCHING, // Only trips in searching state can be accepted
             },
+            include: {
+                passengers: true,
+            },
         });
 
         if (!trip) {
@@ -461,9 +624,9 @@ export class TripsService {
         }
 
         // Accept the trip
-        return this.prisma.$transaction(async (prisma) => {
+        const updatedTrip = await this.prisma.$transaction(async (prisma) => {
             // Update trip
-            const updatedTrip = await prisma.trip.update({
+            const updated = await prisma.trip.update({
                 where: { id: tripId },
                 data: {
                     driverId: driver.id,
@@ -483,8 +646,92 @@ export class TripsService {
                 data: { isAvailable: false },
             });
 
-            return updatedTrip;
+            return updated;
         });
+
+        // Emit trip update via WebSocket
+        this.tripsGateway.emitTripUpdate(tripId, TripStatus.CONFIRMED, {
+            trip: updatedTrip,
+            driver: {
+                id: driver.id,
+                userId: driver.userId,
+                name: `${driver.user.firstName} ${driver.user.lastName}`,
+                profilePicture: driver.user.profilePicture,
+                phone: driver.user.phone,
+                rating: await this.getDriverRating(driver.userId),
+                vehicle: {
+                    make: driver.vehicle?.make,
+                    model: driver.vehicle?.model,
+                    color: driver.vehicle?.color,
+                    plate: driver.vehicle?.plate,
+                }
+            }
+        });
+
+        // Send individual notifications to passengers
+        for (const passenger of trip.passengers) {
+            this.tripsGateway.sendToUser(passenger.passengerId, 'trip_notification', {
+                tripId,
+                status: TripStatus.CONFIRMED,
+                message: 'Un conductor ha aceptado tu viaje',
+                driverName: `${driver.user.firstName} ${driver.user.lastName}`,
+            });
+        }
+
+        return updatedTrip;
+    }
+
+    // Helper method to get driver rating
+    private async getDriverRating(driverId: string): Promise<number> {
+        const ratings = await this.prisma.rating.findMany({
+            where: {
+                toUserId: driverId,
+            },
+            select: {
+                score: true,
+            },
+        });
+
+        if (ratings.length === 0) return 0;
+
+        const total = ratings.reduce((sum, rating) => sum + rating.score, 0);
+        return parseFloat((total / ratings.length).toFixed(1));
+    }
+
+    async updateDriverLocation(tripId: string, userId: string, location: { latitude: number, longitude: number }) {
+        // Verify the user is the driver for this trip
+        const driver = await this.prisma.driver.findUnique({
+            where: { userId },
+        });
+
+        if (!driver) {
+            throw new NotFoundException('Conductor no encontrado');
+        }
+
+        const trip = await this.prisma.trip.findUnique({
+            where: {
+                id: tripId,
+                driverId: driver.id,
+                status: {
+                    in: [TripStatus.CONFIRMED, TripStatus.IN_PROGRESS]
+                }
+            },
+        });
+
+        if (!trip) {
+            throw new NotFoundException('Viaje no encontrado o no en estado válido para actualizar ubicación');
+        }
+
+        // Update driver's location
+        await this.prisma.driver.update({
+            where: { id: driver.id },
+            data: { currentLocation: location },
+        });
+
+        // Emit location update via WebSocket
+        this.tripsGateway.emitDriverLocation(tripId, location);
+
+        return { success: true };
     }
 
     async rateTrip(tripId: string, fromUserId: string, toUserId: string, score: number, comment?: string) {
@@ -537,7 +784,7 @@ export class TripsService {
         }
 
         // Create the rating
-        return this.prisma.rating.create({
+        const rating = await this.prisma.rating.create({
             data: {
                 tripId,
                 fromUserId,
@@ -546,5 +793,15 @@ export class TripsService {
                 comment,
             },
         });
+
+        // Notify the rated user
+        this.tripsGateway.sendToUser(toUserId, 'rating_received', {
+            tripId,
+            score,
+            comment,
+            fromUserType: targetIsDriver ? 'passenger' : 'driver',
+        });
+
+        return rating;
     }
 }

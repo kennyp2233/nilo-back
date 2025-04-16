@@ -14,6 +14,7 @@ import { TripsService } from './trips.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UpdateTripDto } from './dto/update-trip.dto';
 import { RateDto } from './dto/rate-trip.dto';
+import { UpdateLocationDto } from './dto/update-location.dto';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -82,5 +83,15 @@ export class TripsController {
         }
 
         return this.tripsService.rateTrip(id, userId, toUserId, score, comment);
+    }
+
+    @Post(':id/location')
+    @Roles(UserRole.DRIVER)
+    updateLocation(
+        @Param('id') id: string,
+        @GetUser('id') userId: string,
+        @Body() updateLocationDto: UpdateLocationDto
+    ) {
+        return this.tripsService.updateDriverLocation(id, userId, updateLocationDto);
     }
 }

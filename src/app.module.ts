@@ -14,6 +14,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { WalletsModule } from './wallet/wallets.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PromotionsModule } from './promotions/promotions.module';
+import { WebsocketsModule } from './websockets/websockets.module';
 import { validate } from './config/env.validation';
 import { Public } from './auth/decorators/public.decorator';
 
@@ -35,6 +36,7 @@ import { Public } from './auth/decorators/public.decorator';
     WalletsModule,
     NotificationsModule,
     PromotionsModule,
+    WebsocketsModule,
   ],
   /*
   providers: [
